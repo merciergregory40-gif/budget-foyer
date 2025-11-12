@@ -4,49 +4,1886 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#9333ea">
-    <title>Budget Foyer</title>
+    <title>Budget Foyer Pro</title>
     <link rel="manifest" href="manifest.json">
     <script src="https://unpkg.com/react@17/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@17/umd/react-dom.production.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/luxon@3.0.1"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body {
             overscroll-behavior: contain;
             -webkit-tap-highlight-color: transparent;
         }
+        .dark {
+            background-color: #1a1a1a;
+            color: #e5e5e5;
+        }
+        .dark input, .dark select, .dark textarea {
+            background-color: #333;
+            color: white;
+            border-color: #555;
+        }
+        #chart-container {
+            width: 100%;
+            max-width: 400px;
+            margin: 0 auto;
+        }
+        @media print {
+            .no-print { display: none; }
+            body { background: white; color: black; }
+        }
     </style>
 </head>
-<body class="bg-gray-50">
+<body class="bg-gray-50 dark:bg-gray-900 transition-colors duration-300">
     <div id="root"></div>
     <script>
-        // Remplace les imports par des références globales
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useRef } = React;
+        const { jsPDF } = window.jspdf;
+        const { DateTime } = luxon;
+
+        // Données initiales étendues
+        const categories = {
+            "Alimentation": ["Fruits et légumes", "Viande", "Poisson", "Pain", "Produits laitiers", "Pâtes/Riz", "Conserves", "Boissons", "Snacks"],
+            "Hygiène": ["Shampoing", "Dentifrice", "Savon", "Papier toilette", "Lessive", "Produits ménagers"],
+            "Maison": ["Électroménager", "Meubles", "Décoration", "Outillage", "Jardinage"],
+            "Transport": ["Carburant", "Transports en commun", "Péage", "Entretien voiture", "Assurance voiture"],
+            "Loisirs": ["Cinéma", "Restaurants", "Livres", "Jeux vidéo", "Sorties", "Abonnements", "Vacances"],
+            "Santé": ["Médicaments", "Médecin", "Pharmacie", "Mutuelle", "Optique"],
+            "Enfants": ["Fournitures scolaires", "Vêtements", "Jouets", "Activités", "Garde"],
+            "Autres": []
+        };
+
+        const magasinsEtendus = [
+            "Carrefour", "Carrefour Market", "Carrefour City", "Leclerc", "E.Leclerc", "Intermarché", "Intermarché Super",
+            "Auchan", "Auchan Supermarket", "Casino", "Monoprix", "Franprix", "Lidl", "Aldi", "Super U", "Hyper U",
+            "Biocoop", "Naturalia", "Grand Frais", "Picard", "Boulangerie Paul", "Boulangerie U", "Fromagerie",
+            "Boucherie", "Poissonnerie", "Pharmacie", "Parapharmacie", "Amazon", "Cdiscount", "Rakuten",
+            "Uber Eats", "Deliveroo", "Marché du centre", "Primeur", "Épicerie de quartier", "Caviste", "Fleuriste",
+            "Darty", "Fnac", "Bricomarché", "Leroy Merlin", "Castorama", "Décathlon", "Kiabi", "H&M", "Zara",
+            "SFR", "Orange", "Free", "Bouygues", "EDF", "Engie", "Véolia", "Canal+", "Netflix", "Spotify"
+        ];
+
+        const typesDeComptes = [
+            { id: 'commun', name: 'Compte commun', color: '#3B82F6' },
+            { id: 'perso1', name: 'Mon compte personnel', color: '#10B981' },
+            { id: 'perso2', name: 'Compte personnel partenaire', color: '#EF4444' }
+        ];
 
         const App = () => {
+            // États principaux
+            const [darkMode, setDarkMode] = useState(false);
+            const [moisActuel, setMoisActuel] = useState(new Date().getMonth());
+            const [anneeActuelle, setAnneeActuelle] = useState(new Date().getFullYear());
+            const [view, setView] = useState('dashboard');
+            const [activeAccount, setActiveAccount] = useState('commun');
+            const [courses, setCourses] = useState(() => {
+                const saved = localStorage.getItem('courses-v3');
+                return saved ? JSON.parse(saved) : [];
+            });
+            const [budgets, setBudgets] = useState(() => {
+                const saved = localStorage.getItem('budgets-v3');
+                return saved ? JSON.parse(saved) : initBudgets();
+            });
+            const [objectifs, setObjectifs] = useState(() => {
+                const saved = localStorage.getItem('objectifs-v1');
+                return saved ? JSON.parse(saved) : {};
+            });
+            const [nouvelleCourse, setNouvelleCourse] = useState(createEmptyCourse());
+            const [searchTerm, setSearchTerm] = useState('');
+            const [showStats, setShowStats] = useState(false);
+            const [notification, setNotification] = useState(null);
+            const [filteredMagasins, setFilteredMagasins] = useState([]);
+            const [filteredDescriptions, setFilteredDescriptions] = useState([]);
+            const [showMagasinSuggestions, setShowMagasinSuggestions] = useState(false);
+            const [showDescriptionSuggestions, setShowDescriptionSuggestions] = useState(false);
+            const [montantsSuggeres, setMontantsSuggeres] = useState([]);
+            const [editingId, setEditingId] = useState(null);
+            const [currentMonthStats, setCurrentMonthStats] = useState(null);
+            const [importExportModal, setImportExportModal] = useState(false);
+            const [importData, setImportData] = useState('');
+            const [showReportModal, setShowReportModal] = useState(false);
+            const [reportData, setReportData] = useState(null);
+            const [syncAccountsModal, setSyncAccountsModal] = useState(false);
+            const [newObjectif, setNewObjectif] = useState({ nom: '', montant: '', echeance: '', compte: 'commun' });
+
+            const moisFr = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+            const currentDate = new Date();
+            const currentMonthName = moisFr[currentDate.getMonth()];
+            const currentYear = currentDate.getFullYear();
+
+            // Références
+            const magasinInputRef = useRef(null);
+            const descriptionInputRef = useRef(null);
+            const chartRef = useRef(null);
+
+            // Initialisation
+            function initBudgets() {
+                const initial = {};
+                for (let year = currentYear - 1; year <= currentYear + 1; year++) {
+                    initial[year] = {};
+                    moisFr.forEach(mois => {
+                        initial[year][mois] = {};
+                        typesDeComptes.forEach(account => {
+                            initial[year][mois][account.id] = {
+                                revenus: { salaire1: 0, salaire2: 0, allocations: 0, autres: 0, total: 0 },
+                                depenses: {
+                                    loyer: 0, charges: 0, electricite: 0, gaz: 0, eau: 0,
+                                    internet: 0, telephone: 0, assurances: 0, transports: 0,
+                                    courses: 0, loisirs: 0, sante: 0, enfants: 0, autres: 0, total: 0
+                                },
+                                categories: {},
+                                solde: 0
+                            };
+                        });
+                    });
+                }
+                return initial;
+            }
+
+            function createEmptyCourse() {
+                return {
+                    id: null,
+                    date: DateTime.now().toISODate(),
+                    magasin: '',
+                    description: '',
+                    montant: '',
+                    categorie: 'Alimentation',
+                    compte: activeAccount,
+                    reglee: false
+                };
+            }
+
+            // Sauvegarde automatique
             useEffect(() => {
-                document.title = "Budget Foyer";
-            }, []);
+                localStorage.setItem('courses-v3', JSON.stringify(courses));
+                calculateMonthStats(moisFr[moisActuel], anneeActuelle);
+            }, [courses]);
+
+            useEffect(() => {
+                localStorage.setItem('budgets-v3', JSON.stringify(budgets));
+            }, [budgets]);
+
+            useEffect(() => {
+                localStorage.setItem('objectifs-v1', JSON.stringify(objectifs));
+            }, [objectifs]);
+
+            useEffect(() => {
+                if (darkMode) {
+                    document.documentElement.classList.add('dark');
+                } else {
+                    document.documentElement.classList.remove('dark');
+                }
+            }, [darkMode]);
+
+            // Calcul des statistiques
+            const calculateMonthStats = (mois, annee) => {
+                const monthCourses = courses.filter(c =>
+                    new Date(c.date).getMonth() === moisFr.indexOf(mois) &&
+                    new Date(c.date).getFullYear() === annee
+                );
+
+                const stats = {
+                    total: 0,
+                    byCategory: {},
+                    byMagasin: {},
+                    byAccount: {},
+                    topItems: [],
+                    depensesParJour: {}
+                };
+
+                // Initialiser par compte
+                typesDeComptes.forEach(account => {
+                    stats.byAccount[account.id] = {
+                        total: 0,
+                        categories: {},
+                        revenus: budgets[annee][mois][account.id]?.revenus.total || 0
+                    };
+                });
+
+                monthCourses.forEach(course => {
+                    const montant = parseFloat(course.montant);
+                    stats.total += montant;
+
+                    // Par compte
+                    if (!stats.byAccount[course.compte]) {
+                        stats.byAccount[course.compte] = { total: 0, categories: {} };
+                    }
+                    stats.byAccount[course.compte].total += montant;
+
+                    // Par catégorie (par compte)
+                    if (!stats.byAccount[course.compte].categories[course.categorie]) {
+                        stats.byAccount[course.compte].categories[course.categorie] = 0;
+                    }
+                    stats.byAccount[course.compte].categories[course.categorie] += montant;
+
+                    // Par catégorie (global)
+                    if (!stats.byCategory[course.categorie]) {
+                        stats.byCategory[course.categorie] = 0;
+                    }
+                    stats.byCategory[course.categorie] += montant;
+
+                    // Par magasin
+                    if (!stats.byMagasin[course.magasin]) {
+                        stats.byMagasin[course.magasin] = 0;
+                    }
+                    stats.byMagasin[course.magasin] += montant;
+
+                    // Par jour
+                    const day = new Date(course.date).getDate();
+                    if (!stats.depensesParJour[day]) {
+                        stats.depensesParJour[day] = 0;
+                    }
+                    stats.depensesParJour[day] += montant;
+
+                    // Top articles
+                    const key = `${course.compte}-${course.magasin}-${course.description}`;
+                    if (!stats.topItems[key]) {
+                        stats.topItems[key] = { ...course, count: 1, total: montant };
+                    } else {
+                        stats.topItems[key].total += montant;
+                        stats.topItems[key].count++;
+                    }
+                });
+
+                // Trier les résultats
+                stats.topItems = Object.values(stats.topItems)
+                    .sort((a, b) => b.total - a.total)
+                    .slice(0, 5);
+
+                // Calculer le solde par compte
+                typesDeComptes.forEach(account => {
+                    const revenus = budgets[annee][mois][account.id]?.revenus.total || 0;
+                    const depenses = stats.byAccount[account.id]?.total || 0;
+                    stats.byAccount[account.id].solde = revenus - depenses;
+                });
+
+                setCurrentMonthStats(stats);
+            };
+
+            // Calcul des totaux
+            const calculerTotalCoursesMois = (mois, annee, compte = null) => {
+                return courses.filter(c =>
+                    new Date(c.date).getMonth() === moisFr.indexOf(mois) &&
+                    new Date(c.date).getFullYear() === annee &&
+                    (!compte || c.compte === compte)
+                ).reduce((sum, c) => sum + parseFloat(c.montant || 0), 0);
+            };
+
+            const calculerTotalRevenus = (mois, annee, compte) => {
+                return budgets[annee]?.[mois]?.[compte]?.revenus.total || 0;
+            };
+
+            const calculerTotalDepenses = (mois, annee, compte) => {
+                const coursesTotal = calculerTotalCoursesMois(mois, annee, compte);
+                const fixedDepenses = compte ?
+                    Object.values(budgets[annee]?.[mois]?.[compte]?.depenses || {}).reduce((sum, val) => sum + (parseFloat(val) || 0), 0) :
+                    0;
+                return fixedDepenses + coursesTotal;
+            };
+
+            const calculerSolde = (mois, annee, compte) => {
+                return calculerTotalRevenus(mois, annee, compte) - calculerTotalDepenses(mois, annee, compte);
+            };
+
+            // Gestion des suggestions
+            const handleMagasinChange = (value) => {
+                setNouvelleCourse(prev => ({...prev, magasin: value}));
+
+                if (value.length > 1) {
+                    const filtered = magasinsEtendus.filter(m =>
+                        m.toLowerCase().includes(value.toLowerCase())
+                    );
+                    setFilteredMagasins(filtered);
+                    setShowMagasinSuggestions(true);
+
+                    if (value.length > 2) {
+                        const achats = courses.filter(c =>
+                            c.magasin.toLowerCase().includes(value.toLowerCase()) &&
+                            c.compte === activeAccount
+                        );
+                        if (achats.length > 0) {
+                            const montants = [...new Set(achats.map(c => parseFloat(c.montant)))]
+                                .sort((a, b) => b - a)
+                                .slice(0, 5);
+                            setMontantsSuggeres(montants);
+                        }
+                    }
+                } else {
+                    setShowMagasinSuggestions(false);
+                    setMontantsSuggeres([]);
+                }
+            };
+
+            const handleDescriptionChange = (value) => {
+                setNouvelleCourse(prev => ({...prev, description: value}));
+
+                if (value.length > 1) {
+                    const allDescriptions = Object.values(categories).flat();
+                    const filtered = allDescriptions.filter(d =>
+                        d.toLowerCase().includes(value.toLowerCase())
+                    );
+                    setFilteredDescriptions(filtered);
+                    setShowDescriptionSuggestions(true);
+
+                    for (const [cat, descs] of Object.entries(categories)) {
+                        if (descs.some(d => d.toLowerCase().includes(value.toLowerCase()))) {
+                            setNouvelleCourse(prev => ({...prev, categorie: cat}));
+                            break;
+                        }
+                    }
+                } else {
+                    setShowDescriptionSuggestions(false);
+                }
+            };
+
+            const selectMagasin = (magasin) => {
+                setNouvelleCourse(prev => ({...prev, magasin}));
+                setShowMagasinSuggestions(false);
+
+                const achats = courses.filter(c =>
+                    c.magasin.toLowerCase() === magasin.toLowerCase() &&
+                    c.compte === activeAccount
+                );
+                if (achats.length > 0) {
+                    const montants = [...new Set(achats.map(c => parseFloat(c.montant)))]
+                        .sort((a, b) => b - a)
+                        .slice(0, 5);
+                    setMontantsSuggeres(montants);
+                }
+            };
+
+            const selectDescription = (description) => {
+                setNouvelleCourse(prev => ({...prev, description}));
+
+                for (const [cat, descs] of Object.entries(categories)) {
+                    if (descs.includes(description)) {
+                        setNouvelleCourse(prev => ({...prev, categorie: cat}));
+                        break;
+                    }
+                }
+                setShowDescriptionSuggestions(false);
+            };
+
+            // Gestion des courses
+            const ajouterCourse = () => {
+                if (!nouvelleCourse.montant || !nouvelleCourse.date) {
+                    showNotification("Veuillez remplir le montant et la date", "error");
+                    return;
+                }
+
+                const courseToAdd = {
+                    ...nouvelleCourse,
+                    id: editingId || Date.now(),
+                    montant: parseFloat(nouvelleCourse.montant).toFixed(2),
+                    date: nouvelleCourse.date,
+                    mois: moisFr[new Date(nouvelleCourse.date).getMonth()],
+                    annee: new Date(nouvelleCourse.date).getFullYear(),
+                    compte: activeAccount
+                };
+
+                if (editingId) {
+                    setCourses(prev => prev.map(c => c.id === editingId ? courseToAdd : c));
+                    showNotification("Course modifiée avec succès", "success");
+                    setEditingId(null);
+                } else {
+                    setCourses(prev => [...prev, courseToAdd]);
+                    showNotification("Course ajoutée avec succès", "success");
+                    resetNouvelleCourse();
+                }
+
+                setShowMagasinSuggestions(false);
+                setShowDescriptionSuggestions(false);
+            };
+
+            const supprimerCourse = (id) => {
+                if (confirm("Voulez-vous vraiment supprimer cette course ?")) {
+                    setCourses(prev => prev.filter(c => c.id !== id));
+                    showNotification("Course supprimée", "warning");
+                }
+            };
+
+            const modifierCourse = (course) => {
+                setEditingId(course.id);
+                setNouvelleCourse({
+                    ...course,
+                    montant: course.montant.toString()
+                });
+                setActiveAccount(course.compte);
+                setView('courses');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            };
+
+            const toggleCourseReglee = (id) => {
+                setCourses(prev => prev.map(c =>
+                    c.id === id ? {...c, reglee: !c.reglee} : c
+                ));
+            };
+
+            const resetNouvelleCourse = () => {
+                setNouvelleCourse(createEmptyCourse());
+                setEditingId(null);
+                setFilteredMagasins([]);
+                setFilteredDescriptions([]);
+                setMontantsSuggeres([]);
+            };
+
+            // Gestion des budgets
+            const updateBudget = (annee, mois, compte, type, field, value) => {
+                const numValue = parseFloat(value) || 0;
+                const updatedBudgets = {...budgets};
+
+                if (!updatedBudgets[annee]) updatedBudgets[annee] = {};
+                if (!updatedBudgets[annee][mois]) updatedBudgets[annee][mois] = {};
+                if (!updatedBudgets[annee][mois][compte]) {
+                    updatedBudgets[annee][mois][compte] = {
+                        revenus: { salaire1: 0, salaire2: 0, allocations: 0, autres: 0, total: 0 },
+                        depenses: {...initBudgets()[annee][mois][compte].depenses}
+                    };
+                }
+
+                if (type === 'revenus') {
+                    updatedBudgets[annee][mois][compte].revenus[field] = numValue;
+                    updatedBudgets[annee][mois][compte].revenus.total = Object.values(updatedBudgets[annee][mois][compte].revenus)
+                        .reduce((sum, val) => sum + (parseFloat(val) || 0), 0);
+                } else {
+                    updatedBudgets[annee][mois][compte].depenses[field] = numValue;
+                }
+
+                // Recalculer le total des dépenses
+                updatedBudgets[annee][mois][compte].depenses.total = Object.values(updatedBudgets[annee][mois][compte].depenses)
+                    .reduce((sum, val) => sum + (parseFloat(val) || 0), 0) +
+                    calculerTotalCoursesMois(mois, annee, compte);
+
+                // Recalculer le solde
+                updatedBudgets[annee][mois][compte].solde =
+                    updatedBudgets[annee][mois][compte].revenus.total -
+                    updatedBudgets[annee][mois][compte].depenses.total;
+
+                setBudgets(updatedBudgets);
+            };
+
+            // Gestion des objectifs
+            const ajouterObjectif = () => {
+                if (!newObjectif.nom || !newObjectif.montant || !newObjectif.echeance) {
+                    showNotification("Veuillez remplir tous les champs", "error");
+                    return;
+                }
+
+                const id = Date.now();
+                setObjectifs(prev => ({
+                    ...prev,
+                    [id]: {
+                        ...newObjectif,
+                        montant: parseFloat(newObjectif.montant),
+                        progres: 0,
+                        termine: false
+                    }
+                }));
+
+                setNewObjectif({ nom: '', montant: '', echeance: '', compte: 'commun' });
+                showNotification("Objectif ajouté avec succès", "success");
+            };
+
+            const supprimerObjectif = (id) => {
+                if (confirm("Voulez-vous vraiment supprimer cet objectif ?")) {
+                    const updated = {...objectifs};
+                    delete updated[id];
+                    setObjectifs(updated);
+                    showNotification("Objectif supprimé", "warning");
+                }
+            };
+
+            const updateProgresObjectif = (id, montant) => {
+                setObjectifs(prev => ({
+                    ...prev,
+                    [id]: {
+                        ...prev[id],
+                        progres: parseFloat(montant),
+                        termine: parseFloat(montant) >= prev[id].montant
+                    }
+                }));
+            };
+
+            // Synchronisation des comptes
+            const synchroniserComptes = () => {
+                const communCourses = courses.filter(c => c.compte === 'commun');
+                const perso1Courses = courses.filter(c => c.compte === 'perso1');
+                const perso2Courses = courses.filter(c => c.compte === 'perso2');
+
+                // Calculer les soldes
+                const soldeCommun = calculerSolde(moisFr[moisActuel], anneeActuelle, 'commun');
+                const soldePerso1 = calculerSolde(moisFr[moisActuel], anneeActuelle, 'perso1');
+                const soldePerso2 = calculerSolde(moisFr[moisActuel], anneeActuelle, 'perso2');
+
+                const total = soldeCommun + soldePerso1 + soldePerso2;
+                const partEgale = total / 2;
+
+                // Créer une transaction d'équilibrage (exemple simplifié)
+                const ajustement = {
+                    id: Date.now(),
+                    date: DateTime.now().toISODate(),
+                    magasin: "Virement interne",
+                    description: "Équilibrage des comptes",
+                    montant: (partEgale - soldePerso1).toFixed(2),
+                    categorie: "Autres",
+                    compte: soldePerso1 > partEgale ? 'perso1' : 'perso2',
+                    reglee: true,
+                    synchronisation: true
+                };
+
+                if (Math.abs(ajustement.montant) > 1) { // Seuil de 1€ pour éviter les micro-transactions
+                    setCourses(prev => [...prev, ajustement]);
+                    showNotification(`Synchronisation effectuée: virement de ${Math.abs(ajustement.montant)}€`, "success");
+                } else {
+                    showNotification("Les comptes sont déjà équilibrés", "info");
+                }
+
+                setSyncAccountsModal(false);
+            };
+
+            // Génération de rapport PDF
+            const genererRapportMensuel = () => {
+                const mois = moisFr[moisActuel];
+                const annee = anneeActuelle;
+                const doc = new jsPDF();
+
+                // Titre
+                doc.setFontSize(18);
+                doc.text(`Rapport mensuel - ${mois} ${annee}`, 105, 20, { align: 'center' });
+
+                // Résumé
+                doc.setFontSize(12);
+                let y = 30;
+
+                typesDeComptes.forEach(account => {
+                    const revenus = calculerTotalRevenus(mois, annee, account.id);
+                    const depenses = calculerTotalDepenses(mois, annee, account.id);
+                    const solde = revenus - depenses;
+
+                    doc.text(`${account.name}:`, 20, y);
+                    doc.text(`Revenus: ${revenus.toFixed(2)}€`, 40, y);
+                    doc.text(`Dépenses: ${depenses.toFixed(2)}€`, 80, y);
+                    doc.text(`Solde: ${solde.toFixed(2)}€`, 120, y);
+                    y += 10;
+                });
+
+                y += 5;
+                doc.text("Dépenses par catégorie:", 20, y);
+                y += 10;
+
+                if (currentMonthStats) {
+                    Object.entries(currentMonthStats.byCategory).forEach(([cat, montant]) => {
+                        doc.text(`${cat}: ${montant.toFixed(2)}€`, 20, y);
+                        y += 7;
+                    });
+                }
+
+                // Graphique (simplifié pour le PDF)
+                y += 10;
+                doc.text("Répartition des dépenses:", 20, y);
+
+                // Tableau des 5 plus grosses dépenses
+                y += 20;
+                doc.text("Top 5 dépenses:", 20, y);
+                y += 7;
+
+                if (currentMonthStats?.topItems.length > 0) {
+                    currentMonthStats.topItems.slice(0, 5).forEach((item, i) => {
+                        doc.text(`${i+1}. ${item.magasin} - ${item.description}: ${item.total.toFixed(2)}€`, 20, y);
+                        y += 7;
+                    });
+                }
+
+                // Sauvegarder le PDF
+                doc.save(`Rapport_Budget_${mois}_${annee}.pdf`);
+                showNotification("Rapport PDF généré avec succès", "success");
+            };
+
+            const preparerRapportDetaille = () => {
+                const mois = moisFr[moisActuel];
+                const annee = anneeActuelle;
+
+                const data = {
+                    periode: `${mois} ${annee}`,
+                    comptes: {},
+                    categories: {},
+                    topDepenses: currentMonthStats?.topItems || [],
+                    depensesParJour: currentMonthStats?.depensesParJour || {}
+                };
+
+                // Par compte
+                typesDeComptes.forEach(account => {
+                    data.comptes[account.id] = {
+                        revenus: calculerTotalRevenus(mois, annee, account.id),
+                        depenses: calculerTotalDepenses(mois, annee, account.id),
+                        solde: calculerSolde(mois, annee, account.id),
+                        courses: courses.filter(c =>
+                            c.compte === account.id &&
+                            new Date(c.date).getMonth() === moisActuel &&
+                            new Date(c.date).getFullYear() === anneeActuelle
+                        )
+                    };
+                });
+
+                // Par catégorie (global)
+                if (currentMonthStats) {
+                    data.categories = currentMonthStats.byCategory;
+                }
+
+                setReportData(data);
+                setShowReportModal(true);
+            };
+
+            // Export/Import
+            const exportData = () => {
+                const data = {
+                    version: "3.0",
+                    date: new Date().toISOString(),
+                    courses,
+                    budgets,
+                    objectifs
+                };
+                return JSON.stringify(data, null, 2);
+            };
+
+            const handleExport = () => {
+                const dataStr = exportData();
+                const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+                const exportFileDefaultName = `budget-foyer-export-${DateTime.now().toFormat('yyyy-MM-dd')}.json`;
+
+                const linkElement = document.createElement('a');
+                linkElement.setAttribute('href', dataUri);
+                linkElement.setAttribute('download', exportFileDefaultName);
+                linkElement.click();
+                showNotification("Données exportées avec succès", "success");
+            };
+
+            const handleImport = () => {
+                try {
+                    const data = JSON.parse(importData);
+                    if (data.courses && data.budgets) {
+                        setCourses(data.courses || []);
+                        setBudgets(data.budgets || initBudgets());
+                        if (data.objectifs) setObjectifs(data.objectifs);
+                        localStorage.setItem('courses-v3', JSON.stringify(data.courses));
+                        localStorage.setItem('budgets-v3', JSON.stringify(data.budgets));
+                        if (data.objectifs) localStorage.setItem('objectifs-v1', JSON.stringify(data.objectifs));
+                        showNotification("Données importées avec succès", "success");
+                        setImportExportModal(false);
+                        setImportData('');
+                    } else {
+                        showNotification("Fichier de sauvegarde invalide", "error");
+                    }
+                } catch (e) {
+                    showNotification("Erreur lors de l'import: " + e.message, "error");
+                }
+            };
+
+            // Notifications
+            const showNotification = (message, type) => {
+                setNotification({ message, type });
+                setTimeout(() => setNotification(null), 3000);
+            };
+
+            // Rendu des graphiques
+            const renderChart = () => {
+                if (!currentMonthStats) return null;
+
+                const categories = Object.keys(currentMonthStats.byCategory);
+                const amounts = categories.map(cat => currentMonthStats.byCategory[cat]);
+
+                const options = {
+                    series: amounts,
+                    chart: {
+                        type: 'donut',
+                        height: 300
+                    },
+                    labels: categories,
+                    colors: [
+                        '#10B981', '#3B82F6', '#F59E0B', '#EF4444',
+                        '#8B5CF6', '#06B6D4', '#EC4899', '#14B8A6'
+                    ],
+                    plotOptions: {
+                        pie: {
+                            donut: {
+                                labels: {
+                                    show: true,
+                                    total: {
+                                        show: true,
+                                        label: 'Total',
+                                        formatter: () => `${currentMonthStats.total.toFixed(2)} €`
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    dataLabels: { enabled: true },
+                    legend: { position: 'bottom' },
+                    responsive: [{
+                        breakpoint: 480,
+                        options: {
+                            chart: { width: 300 },
+                            legend: { position: 'bottom' }
+                        }
+                    }]
+                };
+
+                return React.createElement(
+                    'div',
+                    { id: "chart-container", className: "mt-4" },
+                    React.createElement(
+                        'div',
+                        { className: "bg-white dark:bg-gray-800 p-4 rounded-lg shadow" },
+                        React.createElement('h3', { className: 'font-semibold mb-2 text-gray-800 dark:text-white' }, 'Répartition par catégorie'),
+                        React.createElement('div', {
+                            id: "chart",
+                            ref: chartRef
+                        })
+                    )
+                );
+            };
+
+            const renderAccountChart = () => {
+                if (!currentMonthStats) return null;
+
+                const accounts = typesDeComptes.map(acc => acc.id);
+                const soldeData = accounts.map(acc => currentMonthStats.byAccount[acc]?.solde || 0);
+                const depensesData = accounts.map(acc => currentMonthStats.byAccount[acc]?.total || 0);
+
+                const options = {
+                    series: [{
+                        name: 'Solde',
+                        data: soldeData
+                    }, {
+                        name: 'Dépenses',
+                        data: depensesData
+                    }],
+                    chart: {
+                        type: 'bar',
+                        height: 250,
+                        stacked: false
+                    },
+                    plotOptions: {
+                        bar: {
+                            horizontal: false,
+                            columnWidth: '50%',
+                        },
+                    },
+                    dataLabels: { enabled: false },
+                    stroke: { width: 1 },
+                    colors: typesDeComptes.map(acc => acc.color),
+                    xaxis: { categories: typesDeComptes.map(acc => acc.name) },
+                    yaxis: { title: { text: 'Montant (€)' } },
+                    legend: { position: 'top' }
+                };
+
+                return React.createElement(
+                    'div',
+                    { className: "mt-4 bg-white dark:bg-gray-800 p-4 rounded-lg shadow" },
+                    React.createElement('h3', { className: 'font-semibold mb-2 text-gray-800 dark:text-white' }, 'Solde par compte'),
+                    React.createElement('div', { id: "account-chart" })
+                );
+            };
+
+            // Composants réutilisables
+            const SuggestionsDropdown = ({ items, show, onSelect, inputRef }) => {
+                if (!show || items.length === 0) return null;
+                return React.createElement(
+                    'div',
+                    {
+                        className: 'absolute z-20 w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg mt-1 max-h-60 overflow-y-auto',
+                        style: { top: inputRef.current?.offsetHeight + 5, left: 0 }
+                    },
+                    items.map((item, index) =>
+                        React.createElement(
+                            'div',
+                            {
+                                key: index,
+                                onClick: () => onSelect(item),
+                                className: 'px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer border-b border-gray-100 dark:border-gray-700 last:border-0'
+                            },
+                            item
+                        )
+                    )
+                );
+            };
+
+            const AccountSelector = () => (
+                React.createElement(
+                    'div',
+                    { className: 'flex space-x-2 mb-4' },
+                    typesDeComptes.map(account =>
+                        React.createElement(
+                            'button',
+                            {
+                                key: account.id,
+                                onClick: () => setActiveAccount(account.id),
+                                className: `px-3 py-1 rounded-full text-sm font-medium ${
+                                    activeAccount === account.id
+                                        ? 'bg-opacity-20 text-white'
+                                        : 'bg-opacity-10 text-gray-500 dark:text-gray-400'
+                                }`,
+                                style: { backgroundColor: account.color }
+                            },
+                            account.name
+                        )
+                    )
+                )
+            );
+
+            const CourseItem = ({ course }) => {
+                const account = typesDeComptes.find(acc => acc.id === course.compte);
+                return React.createElement(
+                    'div',
+                    {
+                        key: course.id,
+                        className: `rounded-lg p-3 mb-2 border-l-4 ${
+                            course.reglee ? 'border-green-500 bg-green-50 dark:bg-green-900/30' : 'border-yellow-500 bg-yellow-50 dark:bg-yellow-900/30'
+                        }`
+                    },
+                    React.createElement(
+                        'div',
+                        { className: 'flex justify-between items-start' },
+                        React.createElement(
+                            'div',
+                            null,
+                            React.createElement('div', { className: 'flex items-center' },
+                                React.createElement('span', {
+                                    className: 'w-2 h-2 rounded-full mr-2',
+                                    style: { backgroundColor: account?.color }
+                                }),
+                                React.createElement('span', { className: 'font-medium' }, course.magasin)
+                            ),
+                            React.createElement('div', { className: 'text-sm text-gray-500 dark:text-gray-400' },
+                                `${new Date(course.date).toLocaleDateString('fr-FR')} - ${course.categorie}`
+                            ),
+                            React.createElement('div', { className: 'text-xs text-gray-400 dark:text-gray-500' }, course.description)
+                        ),
+                        React.createElement(
+                            'div',
+                            { className: 'text-right' },
+                            React.createElement('div', {
+                                className: 'font-medium',
+                                style: { color: account?.color }
+                            }, `${parseFloat(course.montant).toFixed(2)} €`),
+                            React.createElement(
+                                'div',
+                                { className: 'flex space-x-1 mt-1' },
+                                React.createElement(
+                                    'button',
+                                    {
+                                        onClick: () => modifierCourse(course),
+                                        className: 'p-1 text-blue-600 hover:bg-blue-50 dark:hover:bg-gray-700 rounded text-sm'
+                                    },
+                                    '✏️'
+                                ),
+                                React.createElement(
+                                    'button',
+                                    {
+                                        onClick: () => supprimerCourse(course.id),
+                                        className: 'p-1 text-red-600 hover:bg-red-50 dark:hover:bg-gray-700 rounded text-sm'
+                                    },
+                                    '🗑️'
+                                ),
+                                React.createElement(
+                                    'button',
+                                    {
+                                        onClick: () => toggleCourseReglee(course.id),
+                                        className: 'p-1 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 rounded text-sm'
+                                    },
+                                    course.reglee ? '✅' : '⬜'
+                                )
+                            )
+                        )
+                    )
+                );
+            };
+
+            const BudgetCategoryInput = ({ annee, mois, compte, type, field, label }) => {
+                const value = budgets[annee]?.[mois]?.[compte]?.[type]?.[field] || 0;
+                return React.createElement(
+                    'div',
+                    { className: 'mb-2' },
+                    React.createElement('label', { className: 'text-sm block mb-1' }, label),
+                    React.createElement('input', {
+                        type: 'number',
+                        step: '0.01',
+                        value: value,
+                        onChange: (e) => updateBudget(annee, mois, compte, type, field, e.target.value),
+                        className: 'w-full px-3 py-2 border rounded-lg'
+                    })
+                );
+            };
+
+            // Rendu principal
+            const moisCourant = moisFr[moisActuel];
+            const revenus = calculerTotalRevenus(moisCourant, anneeActuelle, activeAccount);
+            const depenses = calculerTotalDepenses(moisCourant, anneeActuelle, activeAccount);
+            const solde = calculerSolde(moisCourant, anneeActuelle, activeAccount);
+            const tauxEpargne = revenus > 0 ? ((solde / revenus) * 100).toFixed(1) : 0;
+
+            const coursesDuMois = courses.filter(c =>
+                new Date(c.date).getMonth() === moisActuel &&
+                new Date(c.date).getFullYear() === anneeActuelle &&
+                c.compte === activeAccount
+            );
+
+            const filteredCourses = searchTerm ?
+                courses.filter(c =>
+                    (c.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                     c.magasin.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                     c.categorie.toLowerCase().includes(searchTerm.toLowerCase())) &&
+                     c.compte === activeAccount
+                ) :
+                coursesDuMois;
+
+            const objectifsActifs = Object.entries(objectifs).filter(([id, obj]) =>
+                !obj.termine && new Date(obj.echeance) >= new Date()
+            );
 
             return React.createElement(
                 'div',
-                { className: 'min-h-screen bg-gray-50 pb-20' },
+                { className: 'min-h-screen pb-20 bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100' },
+                // Notification
+                notification && React.createElement(
+                    'div',
+                    {
+                        className: `fixed top-4 left-1/2 transform -translate-x-1/2 px-4 py-2 rounded-lg shadow-lg text-white ${
+                            notification.type === 'success' ? 'bg-green-500' :
+                            notification.type === 'error' ? 'bg-red-500' :
+                            notification.type === 'warning' ? 'bg-yellow-500' : 'bg-blue-500'
+                        } z-50`
+                    },
+                    notification.message
+                ),
+
+                // Modal Import/Export
+                importExportModal && React.createElement(
+                    'div',
+                    { className: 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4' },
+                    React.createElement(
+                        'div',
+                        { className: 'bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md' },
+                        React.createElement('h2', { className: 'text-xl font-bold mb-4' }, 'Importer/Exporter les données'),
+                        React.createElement('div', { className: 'mb-4' },
+                            React.createElement('h3', { className: 'font-semibold mb-2' }, 'Exporter'),
+                            React.createElement(
+                                'button',
+                                {
+                                    onClick: handleExport,
+                                    className: 'bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 w-full'
+                                },
+                                'Télécharger la sauvegarde'
+                            )
+                        ),
+                        React.createElement('div', null,
+                            React.createElement('h3', { className: 'font-semibold mb-2' }, 'Importer'),
+                            React.createElement('textarea', {
+                                value: importData,
+                                onChange: (e) => setImportData(e.target.value),
+                                className: 'w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600',
+                                rows: 10,
+                                placeholder: 'Collez ici votre sauvegarde'
+                            }),
+                            React.createElement(
+                                'button',
+                                {
+                                    onClick: handleImport,
+                                    className: 'bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 mt-2 w-full'
+                                },
+                                'Importer les données'
+                            )
+                        ),
+                        React.createElement(
+                            'button',
+                            {
+                                onClick: () => setImportExportModal(false),
+                                className: 'mt-4 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 w-full'
+                            },
+                            'Fermer'
+                        )
+                    )
+                ),
+
+                // Modal Rapport
+                showReportModal && reportData && React.createElement(
+                    'div',
+                    { className: 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto' },
+                    React.createElement(
+                        'div',
+                        { className: 'bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto' },
+                        React.createElement('h2', { className: 'text-xl font-bold mb-4' }, `Rapport détaillé - ${reportData.periode}`),
+
+                        React.createElement(
+                            'div',
+                            { className: 'mb-6' },
+                            React.createElement('h3', { className: 'font-semibold mb-2' }, 'Par compte'),
+                            typesDeComptes.map(account => {
+                                const data = reportData.comptes[account.id];
+                                return React.createElement(
+                                    'div',
+                                    { key: account.id, className: 'mb-4 p-3 border rounded-lg' },
+                                    React.createElement('h4', { className: 'font-medium mb-2' }, account.name),
+                                    React.createElement('div', null, `Revenus: ${data.revenus.toFixed(2)}€`),
+                                    React.createElement('div', null, `Dépenses: ${data.depenses.toFixed(2)}€`),
+                                    React.createElement('div', null, `Solde: ${data.solde.toFixed(2)}€`),
+                                    React.createElement('div', { className: 'mt-2' },
+                                        React.createElement('h5', { className: 'font-medium' }, 'Dernières courses:'),
+                                        data.courses.slice(0, 3).map(course =>
+                                            React.createElement('div', { key: course.id, className: 'text-sm ml-2' },
+                                                `- ${course.magasin}: ${course.description} (${course.montant}€)`
+                                            )
+                                        )
+                                    )
+                                );
+                            })
+                        ),
+
+                        React.createElement(
+                            'div',
+                            { className: 'mb-6' },
+                            React.createElement('h3', { className: 'font-semibold mb-2' }, 'Par catégorie'),
+                            Object.entries(reportData.categories).map(([cat, montant]) =>
+                                React.createElement(
+                                    'div',
+                                    { key: cat, className: 'flex justify-between py-1 border-b last:border-0 border-gray-200 dark:border-gray-700' },
+                                    React.createElement('div', null, cat),
+                                    React.createElement('div', null, `${montant.toFixed(2)}€`)
+                                )
+                            )
+                        ),
+
+                        React.createElement(
+                            'div',
+                            { className: 'mb-6' },
+                            React.createElement('h3', { className: 'font-semibold mb-2' }, 'Top 5 dépenses'),
+                            reportData.topDepenses.slice(0, 5).map((item, i) =>
+                                React.createElement(
+                                    'div',
+                                    { key: i, className: 'flex justify-between py-1 border-b last:border-0 border-gray-200 dark:border-gray-700' },
+                                    React.createElement('div', null, `${item.magasin} - ${item.description}`),
+                                    React.createElement('div', null, `${item.total.toFixed(2)}€`)
+                                )
+                            )
+                        ),
+
+                        React.createElement(
+                            'div',
+                            { className: 'mb-6' },
+                            React.createElement('h3', { className: 'font-semibold mb-2' }, 'Dépenses par jour'),
+                            React.createElement(
+                                'div',
+                                { className: 'grid grid-cols-5 gap-2' },
+                                Object.entries(reportData.depensesParJour).map(([day, montant]) =>
+                                    React.createElement(
+                                        'div',
+                                        { key: day, className: 'text-center' },
+                                        React.createElement('div', { className: 'text-xs' }, day),
+                                        React.createElement('div', { className: 'font-medium' }, `${montant.toFixed(0)}€`)
+                                    )
+                                )
+                            )
+                        ),
+
+                        React.createElement(
+                            'button',
+                            {
+                                onClick: () => setShowReportModal(false),
+                                className: 'mt-4 bg-gray-200 dark:bg-gray-700 px-4 py-2 rounded hover:bg-gray-300 dark:hover:bg-gray-600 w-full'
+                            },
+                            'Fermer'
+                        )
+                    )
+                ),
+
+                // Modal Synchronisation
+                syncAccountsModal && React.createElement(
+                    'div',
+                    { className: 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4' },
+                    React.createElement(
+                        'div',
+                        { className: 'bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md' },
+                        React.createElement('h2', { className: 'text-xl font-bold mb-4' }, 'Synchroniser les comptes'),
+                        React.createElement('p', { className: 'mb-4' },
+                            'Cette opération va équilibrer les soldes entre les comptes personnels et le compte commun.'
+                        ),
+                        React.createElement(
+                            'div',
+                            { className: 'mb-4' },
+                            typesDeComptes.map(account => {
+                                const s = calculerSolde(moisCourant, anneeActuelle, account.id);
+                                return React.createElement(
+                                    'div',
+                                    { key: account.id, className: 'flex justify-between mb-2' },
+                                    React.createElement('span', null, account.name),
+                                    React.createElement('span', { className: s >= 0 ? 'text-green-600' : 'text-red-600' },
+                                        `${s.toFixed(2)}€`
+                                    )
+                                );
+                            })
+                        ),
+                        React.createElement(
+                            'div',
+                            { className: 'flex space-x-2' },
+                            React.createElement(
+                                'button',
+                                {
+                                    onClick: synchroniserComptes,
+                                    className: 'bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600 flex-1'
+                                },
+                                'Équilibrer'
+                            ),
+                            React.createElement(
+                                'button',
+                                {
+                                    onClick: () => setSyncAccountsModal(false),
+                                    className: 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 px-4 py-2 rounded hover:bg-gray-300 dark:hover:bg-gray-600 flex-1'
+                                },
+                                'Annuler'
+                            )
+                        )
+                    )
+                ),
+
+                // Contenu principal
                 React.createElement(
                     'div',
                     { className: 'max-w-md mx-auto' },
+                    // En-tête
                     React.createElement(
                         'div',
-                        { className: 'bg-gradient-to-r from-purple-600 to-blue-600 text-white p-6 shadow-lg' },
-                        React.createElement('h1', { className: 'text-2xl font-bold' }, 'Budget Foyer'),
-                        React.createElement('p', { className: 'text-sm opacity-90 mt-1' }, 'Gérez votre budget facilement')
+                        { className: 'bg-gradient-to-r from-purple-600 to-blue-600 text-white p-6 rounded-b-lg shadow' },
+                        React.createElement(
+                            'div',
+                            { className: 'flex justify-between items-center' },
+                            React.createElement('h1', { className: 'text-2xl font-bold' }, 'Budget Foyer Pro'),
+                            React.createElement(
+                                'button',
+                                {
+                                    onClick: () => setDarkMode(!darkMode),
+                                    className: 'p-2 rounded-full hover:bg-opacity-20'
+                                },
+                                darkMode ? '☀️' : '🌙'
+                            )
+                        ),
+                        React.createElement('p', { className: 'text-sm opacity-90 mt-1' }, 'Gestion avancée de votre budget familial')
                     ),
+
+                    // Sélecteur de période
                     React.createElement(
                         'div',
-                        { className: 'p-4 text-center' },
-                        React.createElement('p', null, 'Votre application est prête !')
+                        { className: 'p-4 flex justify-between items-center' },
+                        React.createElement(
+                            'select',
+                            {
+                                value: moisActuel,
+                                onChange: (e) => setMoisActuel(parseInt(e.target.value)),
+                                className: 'px-3 py-2 border rounded-lg bg-white dark:bg-gray-700'
+                            },
+                            moisFr.map((m, i) => React.createElement('option', { key: i, value: i }, m))
+                        ),
+                        React.createElement(
+                            'select',
+                            {
+                                value: anneeActuelle,
+                                onChange: (e) => setAnneeActuelle(parseInt(e.target.value)),
+                                className: 'px-3 py-2 border rounded-lg bg-white dark:bg-gray-700 ml-2'
+                            },
+                            [currentYear - 1, currentYear, currentYear + 1].map(year =>
+                                React.createElement('option', { key: year, value: year }, year)
+                            )
+                        )
+                    ),
+
+                    // Navigation
+                    React.createElement(
+                        'div',
+                        { className: 'flex border-b dark:border-gray-700' },
+                        ['dashboard', 'courses', 'budget', 'objectifs', 'stats'].map(tab =>
+                            React.createElement(
+                                'button',
+                                {
+                                    key: tab,
+                                    onClick: () => setView(tab),
+                                    className: `flex-1 py-2 font-medium ${
+                                        view === tab ? 'text-purple-600 border-b-2 border-purple-600' : 'text-gray-500 dark:text-gray-400'
+                                    }`
+                                },
+                                {
+                                    dashboard: '🏠 Accueil',
+                                    courses: '🛒 Courses',
+                                    budget: '💰 Budget',
+                                    objectifs: '🎯 Objectifs',
+                                    stats: '📊 Stats'
+                                }[tab]
+                            )
+                        )
+                    ),
+
+                    // Contenu des onglets
+                    React.createElement(
+                        'div',
+                        { className: 'p-4' },
+                        view === 'dashboard' && React.createElement(
+                            'div',
+                            { className: 'space-y-4' },
+                            // Sélecteur de compte
+                            AccountSelector(),
+
+                            // Cartes résumé
+                            React.createElement(
+                                'div',
+                                { className: 'grid grid-cols-2 gap-3' },
+                                React.createElement(
+                                    'div',
+                                    { className: 'bg-gradient-to-br from-green-400 to-green-600 rounded-xl p-4 text-white shadow' },
+                                    React.createElement('div', { className: 'text-sm opacity-90' }, 'Revenus'),
+                                    React.createElement('div', { className: 'text-2xl font-bold' }, `${revenus.toFixed(2)} €`)
+                                ),
+                                React.createElement(
+                                    'div',
+                                    { className: 'bg-gradient-to-br from-red-400 to-red-600 rounded-xl p-4 text-white shadow' },
+                                    React.createElement('div', { className: 'text-sm opacity-90' }, 'Dépenses'),
+                                    React.createElement('div', { className: 'text-2xl font-bold' }, `${depenses.toFixed(2)} €`)
+                                ),
+                                React.createElement(
+                                    'div',
+                                    {
+                                        className: `rounded-xl p-4 text-white shadow ${
+                                            solde >= 0 ? 'bg-gradient-to-br from-blue-400 to-blue-600' : 'bg-gradient-to-br from-orange-400 to-orange-600'
+                                        }`
+                                    },
+                                    React.createElement('div', { className: 'text-sm opacity-90' }, 'Solde'),
+                                    React.createElement('div', { className: 'text-2xl font-bold' }, `${solde.toFixed(2)} €`)
+                                ),
+                                React.createElement(
+                                    'div',
+                                    { className: 'bg-gradient-to-br from-purple-400 to-purple-600 rounded-xl p-4 text-white shadow' },
+                                    React.createElement('div', { className: 'text-sm opacity-90' }, 'Taux Épargne'),
+                                    React.createElement('div', { className: 'text-2xl font-bold' }, `${tauxEpargne}%`)
+                                )
+                            ),
+
+                            // Résumé courses
+                            React.createElement(
+                                'div',
+                                { className: 'bg-white dark:bg-gray-800 rounded-xl p-4 shadow' },
+                                React.createElement('div', { className: 'flex justify-between items-center' },
+                                    React.createElement('h3', { className: 'font-semibold' }, '🛒 Courses du mois'),
+                                    React.createElement('span', { className: 'text-lg font-bold text-green-600' },
+                                        `${calculerTotalCoursesMois(moisCourant, anneeActuelle, activeAccount).toFixed(2)} €`
+                                    )
+                                ),
+                                React.createElement('div', { className: 'text-sm text-gray-500 dark:text-gray-400 mt-1' },
+                                    `${coursesDuMois.length} achats - Moyenne: ${(
+                                        calculerTotalCoursesMois(moisCourant, anneeActuelle, activeAccount) /
+                                        (coursesDuMois.length || 1)
+                                    ).toFixed(2)} €/achat`
+                                )
+                            ),
+
+                            // Top dépenses
+                            currentMonthStats && currentMonthStats.topItems.length > 0 && React.createElement(
+                                'div',
+                                { className: 'bg-white dark:bg-gray-800 rounded-xl p-4 shadow' },
+                                React.createElement('h3', { className: 'font-semibold mb-2' }, '🏆 Achats fréquents'),
+                                currentMonthStats.topItems
+                                    .filter(item => item.compte === activeAccount)
+                                    .slice(0, 3)
+                                    .map((item, index) =>
+                                        React.createElement(
+                                            'div',
+                                            { key: index, className: 'flex justify-between py-2 border-b last:border-0 border-gray-100 dark:border-gray-700' },
+                                            React.createElement('div', null,
+                                                React.createElement('div', { className: 'font-medium' }, item.magasin),
+                                                React.createElement('div', { className: 'text-xs text-gray-500 dark:text-gray-400' }, item.description)
+                                            ),
+                                            React.createElement('div', { className: 'text-right' },
+                                                React.createElement('div', { className: 'font-medium' }, `${item.total.toFixed(2)} €`),
+                                                React.createElement('div', { className: 'text-xs text-gray-500 dark:text-gray-400' },
+                                                    `${item.count} achat${item.count > 1 ? 's' : ''}`
+                                                )
+                                            )
+                                        )
+                                    )
+                            ),
+
+                            // Alertes budget
+                            depenses > revenus * 0.8 && React.createElement(
+                                'div',
+                                { className: 'bg-yellow-100 dark:bg-yellow-900/30 rounded-xl p-4 shadow' },
+                                React.createElement('div', { className: 'flex items-center' },
+                                    React.createElement('span', { className: 'mr-2' }, '⚠️'),
+                                    React.createElement('span', null, `Dépenses élevées ce mois-ci (${(depenses/revenus*100).toFixed(0)}% du revenu)`)
+                                )
+                            ),
+
+                            // Actions rapides
+                            React.createElement(
+                                'div',
+                                { className: 'grid grid-cols-2 gap-2' },
+                                React.createElement(
+                                    'button',
+                                    {
+                                        onClick: () => setView('courses'),
+                                        className: 'bg-purple-500 text-white py-2 rounded-lg font-medium hover:bg-purple-600'
+                                    },
+                                    '+ Course'
+                                ),
+                                React.createElement(
+                                    'button',
+                                    {
+                                        onClick: () => setImportExportModal(true),
+                                        className: 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 py-2 rounded-lg font-medium hover:bg-gray-300 dark:hover:bg-gray-600'
+                                    },
+                                    '⚙️ Sauvegarder'
+                                ),
+                                React.createElement(
+                                    'button',
+                                    {
+                                        onClick: preparerRapportDetaille,
+                                        className: 'bg-blue-500 text-white py-2 rounded-lg font-medium hover:bg-blue-600 col-span-2'
+                                    },
+                                    '📄 Rapport mensuel'
+                                ),
+                                React.createElement(
+                                    'button',
+                                    {
+                                        onClick: () => setSyncAccountsModal(true),
+                                        className: 'bg-green-500 text-white py-2 rounded-lg font-medium hover:bg-green-600 col-span-2'
+                                    },
+                                    '🔄 Synchroniser comptes'
+                                )
+                            )
+                        ),
+
+                        view === 'courses' && React.createElement(
+                            'div',
+                            { className: 'space-y-4' },
+                            // Sélecteur de compte
+                            AccountSelector(),
+
+                            // Formulaire course
+                            React.createElement(
+                                'div',
+                                { className: 'bg-white dark:bg-gray-800 rounded-xl p-4 shadow' },
+                                React.createElement('h2', { className: 'text-xl font-bold mb-4' },
+                                    editingId ? 'Modifier une course' : 'Nouvelle course'
+                                ),
+
+                                React.createElement('div', { className: 'space-y-3' },
+                                    React.createElement('input', {
+                                        type: 'date',
+                                        value: nouvelleCourse.date,
+                                        onChange: (e) => setNouvelleCourse(prev => ({...prev, date: e.target.value})),
+                                        className: 'w-full px-3 py-2 border rounded-lg'
+                                    }),
+
+                                    React.createElement('div', { className: 'relative' },
+                                        React.createElement('input', {
+                                            ref: magasinInputRef,
+                                            type: 'text',
+                                            placeholder: 'Magasin (ex: Carrefour, Amazon...)',
+                                            value: nouvelleCourse.magasin,
+                                            onChange: (e) => handleMagasinChange(e.target.value),
+                                            className: 'w-full px-3 py-2 border rounded-lg'
+                                        }),
+                                        SuggestionsDropdown({
+                                            items: filteredMagasins,
+                                            show: showMagasinSuggestions,
+                                            onSelect: selectMagasin,
+                                            inputRef: magasinInputRef
+                                        })
+                                    ),
+
+                                    React.createElement('div', { className: 'relative' },
+                                        React.createElement('input', {
+                                            ref: descriptionInputRef,
+                                            type: 'text',
+                                            placeholder: 'Description (ex: Fruits, Électricité...)',
+                                            value: nouvelleCourse.description,
+                                            onChange: (e) => handleDescriptionChange(e.target.value),
+                                            className: 'w-full px-3 py-2 border rounded-lg'
+                                        }),
+                                        SuggestionsDropdown({
+                                            items: filteredDescriptions,
+                                            show: showDescriptionSuggestions,
+                                            onSelect: selectDescription,
+                                            inputRef: descriptionInputRef
+                                        })
+                                    ),
+
+                                    React.createElement('div', { className: 'relative' },
+                                        React.createElement('select', {
+                                            value: nouvelleCourse.categorie,
+                                            onChange: (e) => setNouvelleCourse(prev => ({...prev, categorie: e.target.value})),
+                                            className: 'w-full px-3 py-2 border rounded-lg'
+                                        },
+                                            Object.keys(categories).map(cat =>
+                                                React.createElement('option', { key: cat, value: cat }, cat)
+                                            )
+                                        )
+                                    ),
+
+                                    React.createElement('div', null,
+                                        React.createElement('input', {
+                                            type: 'number',
+                                            step: '0.01',
+                                            placeholder: 'Montant (€)',
+                                            value: nouvelleCourse.montant,
+                                            onChange: (e) => setNouvelleCourse(prev => ({...prev, montant: e.target.value})),
+                                            className: 'w-full px-3 py-2 border rounded-lg'
+                                        }),
+                                        montantsSuggeres.length > 0 && React.createElement(
+                                            'div',
+                                            { className: 'mt-2' },
+                                            React.createElement('div', { className: 'text-xs text-gray-500 dark:text-gray-400 mb-1' }, 'Montants habituels'),
+                                            React.createElement(
+                                                'div',
+                                                { className: 'flex flex-wrap gap-2' },
+                                                montantsSuggeres.map((montant, index) =>
+                                                    React.createElement('button', {
+                                                        key: index,
+                                                        onClick: () => setNouvelleCourse(prev => ({...prev, montant: montant.toString()})),
+                                                        className: 'px-3 py-1 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-200 rounded-full text-sm'
+                                                    }, `${montant.toFixed(2)} €`)
+                                                )
+                                            )
+                                        )
+                                    ),
+
+                                    React.createElement('div', { className: 'flex items-center' },
+                                        React.createElement('input', {
+                                            type: 'checkbox',
+                                            checked: nouvelleCourse.reglee,
+                                            onChange: (e) => setNouvelleCourse(prev => ({...prev, reglee: e.target.checked})),
+                                            className: 'mr-2'
+                                        }),
+                                        React.createElement('label', null, 'Dépense réglée')
+                                    )
+                                ),
+
+                                React.createElement(
+                                    'div',
+                                    { className: 'flex space-x-2 mt-4' },
+                                    React.createElement(
+                                        'button',
+                                        {
+                                            onClick: ajouterCourse,
+                                            className: 'flex-1 bg-green-500 text-white py-2 rounded-lg font-medium hover:bg-green-600'
+                                        },
+                                        editingId ? 'Modifier' : 'Ajouter'
+                                    ),
+                                    (editingId || nouvelleCourse.magasin) && React.createElement(
+                                        'button',
+                                        {
+                                            onClick: resetNouvelleCourse,
+                                            className: 'flex-1 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 py-2 rounded-lg font-medium hover:bg-gray-300 dark:hover:bg-gray-600'
+                                        },
+                                        'Annuler'
+                                    )
+                                )
+                            ),
+
+                            // Liste des courses
+                            React.createElement('div', { className: 'mt-4' },
+                                React.createElement('input', {
+                                    type: 'text',
+                                    placeholder: 'Rechercher dans l\'historique...',
+                                    value: searchTerm,
+                                    onChange: (e) => setSearchTerm(e.target.value),
+                                    className: 'w-full px-3 py-2 border rounded-lg mb-2'
+                                }),
+
+                                filteredCourses.length > 0 ?
+                                    filteredCourses
+                                        .sort((a, b) => new Date(b.date) - new Date(a.date))
+                                        .map(course => React.createElement(CourseItem, { key: course.id, course })) :
+                                    React.createElement(
+                                        'div',
+                                        { className: 'text-center py-4 text-gray-500 dark:text-gray-400' },
+                                        'Aucune course trouvée'
+                                    )
+                            )
+                        ),
+
+                        view === 'budget' && React.createElement(
+                            'div',
+                            { className: 'space-y-4' },
+                            // Sélecteur de compte
+                            AccountSelector(),
+
+                            // Revenus
+                            React.createElement(
+                                'div',
+                                { className: 'bg-white dark:bg-gray-800 rounded-xl p-4 shadow' },
+                                React.createElement('h2', { className: 'text-xl font-bold mb-3' }, 'Revenus'),
+                                React.createElement(BudgetCategoryInput, {
+                                    annee: anneeActuelle,
+                                    mois: moisCourant,
+                                    compte: activeAccount,
+                                    type: 'revenus',
+                                    field: 'salaire1',
+                                    label: 'Salaire 1'
+                                }),
+                                React.createElement(BudgetCategoryInput, {
+                                    annee: anneeActuelle,
+                                    mois: moisCourant,
+                                    compte: activeAccount,
+                                    type: 'revenus',
+                                    field: 'salaire2',
+                                    label: 'Salaire 2'
+                                }),
+                                React.createElement(BudgetCategoryInput, {
+                                    annee: anneeActuelle,
+                                    mois: moisCourant,
+                                    compte: activeAccount,
+                                    type: 'revenus',
+                                    field: 'allocations',
+                                    label: 'Allocations'
+                                }),
+                                React.createElement(BudgetCategoryInput, {
+                                    annee: anneeActuelle,
+                                    mois: moisCourant,
+                                    compte: activeAccount,
+                                    type: 'revenus',
+                                    field: 'autres',
+                                    label: 'Autres revenus'
+                                }),
+                                React.createElement('div', { className: 'font-semibold text-green-600 mt-2' },
+                                    `Total: ${revenus.toFixed(2)} €`
+                                )
+                            ),
+
+                            // Dépenses fixes
+                            React.createElement(
+                                'div',
+                                { className: 'bg-white dark:bg-gray-800 rounded-xl p-4 shadow' },
+                                React.createElement('h2', { className: 'text-xl font-bold mb-3' }, 'Dépenses fixes'),
+                                React.createElement(BudgetCategoryInput, {
+                                    annee: anneeActuelle,
+                                    mois: moisCourant,
+                                    compte: activeAccount,
+                                    type: 'depenses',
+                                    field: 'loyer',
+                                    label: 'Loyer'
+                                }),
+                                React.createElement(BudgetCategoryInput, {
+                                    annee: anneeActuelle,
+                                    mois: moisCourant,
+                                    compte: activeAccount,
+                                    type: 'depenses',
+                                    field: 'charges',
+                                    label: 'Charges'
+                                }),
+                                React.createElement(BudgetCategoryInput, {
+                                    annee: anneeActuelle,
+                                    mois: moisCourant,
+                                    compte: activeAccount,
+                                    type: 'depenses',
+                                    field: 'electricite',
+                                    label: 'Électricité'
+                                }),
+                                React.createElement(BudgetCategoryInput, {
+                                    annee: anneeActuelle,
+                                    mois: moisCourant,
+                                    compte: activeAccount,
+                                    type: 'depenses',
+                                    field: 'gaz',
+                                    label: 'Gaz'
+                                }),
+                                React.createElement(BudgetCategoryInput, {
+                                    annee: anneeActuelle,
+                                    mois: moisCourant,
+                                    compte: activeAccount,
+                                    type: 'depenses',
+                                    field: 'eau',
+                                    label: 'Eau'
+                                }),
+                                React.createElement(BudgetCategoryInput, {
+                                    annee: anneeActuelle,
+                                    mois: moisCourant,
+                                    compte: activeAccount,
+                                    type: 'depenses',
+                                    field: 'internet',
+                                    label: 'Internet'
+                                }),
+                                React.createElement(BudgetCategoryInput, {
+                                    annee: anneeActuelle,
+                                    mois: moisCourant,
+                                    compte: activeAccount,
+                                    type: 'depenses',
+                                    field: 'telephone',
+                                    label: 'Téléphone'
+                                }),
+                                React.createElement(BudgetCategoryInput, {
+                                    annee: anneeActuelle,
+                                    mois: moisCourant,
+                                    compte: activeAccount,
+                                    type: 'depenses',
+                                    field: 'assurances',
+                                    label: 'Assurances'
+                                }),
+                                React.createElement(BudgetCategoryInput, {
+                                    annee: anneeActuelle,
+                                    mois: moisCourant,
+                                    compte: activeAccount,
+                                    type: 'depenses',
+                                    field: 'transports',
+                                    label: 'Transports'
+                                }),
+                                React.createElement('div', { className: 'font-semibold text-red-600 mt-2' },
+                                    `Total dépenses fixes: ${(
+                                        calculerTotalDepenses(moisCourant, anneeActuelle, activeAccount) -
+                                        calculerTotalCoursesMois(moisCourant, anneeActuelle, activeAccount)
+                                    ).toFixed(2)} €`
+                                )
+                            ),
+
+                            // Résumé budget
+                            React.createElement(
+                                'div',
+                                { className: 'bg-white dark:bg-gray-800 rounded-xl p-4 shadow' },
+                                React.createElement('h2', { className: 'text-xl font-bold mb-2' }, 'Résumé'),
+                                React.createElement('div', null, `Courses: ${calculerTotalCoursesMois(moisCourant, anneeActuelle, activeAccount).toFixed(2)} €`),
+                                React.createElement('div', { className: 'font-bold mt-2' },
+                                    `Solde prévisionnel: ${solde.toFixed(2)} €`
+                                )
+                            )
+                        ),
+
+                        view === 'objectifs' && React.createElement(
+                            'div',
+                            { className: 'space-y-4' },
+                            // Sélecteur de compte
+                            AccountSelector(),
+
+                            // Nouveau objectif
+                            React.createElement(
+                                'div',
+                                { className: 'bg-white dark:bg-gray-800 rounded-xl p-4 shadow' },
+                                React.createElement('h2', { className: 'text-xl font-bold mb-4' }, 'Nouvel objectif'),
+                                React.createElement('div', { className: 'space-y-3' },
+                                    React.createElement('input', {
+                                        type: 'text',
+                                        placeholder: 'Nom de l\'objectif (ex: Vacances, Voiture)',
+                                        value: newObjectif.nom,
+                                        onChange: (e) => setNewObjectif(prev => ({...prev, nom: e.target.value})),
+                                        className: 'w-full px-3 py-2 border rounded-lg'
+                                    }),
+                                    React.createElement('input', {
+                                        type: 'number',
+                                        step: '0.01',
+                                        placeholder: 'Montant cible (€)',
+                                        value: newObjectif.montant,
+                                        onChange: (e) => setNewObjectif(prev => ({...prev, montant: e.target.value})),
+                                        className: 'w-full px-3 py-2 border rounded-lg'
+                                    }),
+                                    React.createElement('input', {
+                                        type: 'date',
+                                        value: newObjectif.echeance,
+                                        onChange: (e) => setNewObjectif(prev => ({...prev, echeance: e.target.value})),
+                                        className: 'w-full px-3 py-2 border rounded-lg'
+                                    }),
+                                    React.createElement('select', {
+                                        value: newObjectif.compte,
+                                        onChange: (e) => setNewObjectif(prev => ({...prev, compte: e.target.value})),
+                                        className: 'w-full px-3 py-2 border rounded-lg'
+                                    },
+                                        typesDeComptes.map(account =>
+                                            React.createElement('option', { key: account.id, value: account.id }, account.name)
+                                        )
+                                    )
+                                ),
+                                React.createElement(
+                                    'button',
+                                    {
+                                        onClick: ajouterObjectif,
+                                        className: 'bg-purple-500 text-white px-4 py-2 rounded-lg mt-3 w-full font-medium hover:bg-purple-600'
+                                    },
+                                    'Ajouter l\'objectif'
+                                )
+                            ),
+
+                            // Liste des objectifs
+                            React.createElement(
+                                'div',
+                                { className: 'space-y-3' },
+                                Object.entries(objectifs).length > 0 ?
+                                    Object.entries(objectifs)
+                                        .filter(([id, obj]) => obj.compte === activeAccount)
+                                        .map(([id, obj]) => {
+                                            const progres = (obj.progres / obj.montant * 100).toFixed(1);
+                                            const joursRestants = Math.ceil(
+                                                (new Date(obj.echeance) - new Date()) / (1000 * 60 * 60 * 24)
+                                            );
+
+                                            return React.createElement(
+                                                'div',
+                                                {
+                                                    key: id,
+                                                    className: 'bg-white dark:bg-gray-800 rounded-xl p-4 shadow'
+                                                },
+                                                React.createElement('div', { className: 'flex justify-between items-start' },
+                                                    React.createElement('div', null,
+                                                        React.createElement('div', { className: 'font-semibold' }, obj.nom),
+                                                        React.createElement('div', { className: 'text-sm text-gray-500 dark:text-gray-400' },
+                                                            `Échéance: ${new Date(obj.echeance).toLocaleDateString('fr-FR')} (${joursRestants > 0 ? `${joursRestants} jours` : 'Terminé'})`
+                                                        ),
+                                                        React.createElement('div', { className: 'text-sm' },
+                                                            `${obj.progres.toFixed(2)}€ / ${obj.montant.toFixed(2)}€`
+                                                        )
+                                                    ),
+                                                    React.createElement('div', { className: 'text-right' },
+                                                        React.createElement('div', { className: 'font-medium' },
+                                                            `${progres}%`
+                                                        )
+                                                    )
+                                                ),
+                                                React.createElement('div', { className: 'w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5 mt-2' },
+                                                    React.createElement('div', {
+                                                        className: 'bg-purple-600 h-2.5 rounded-full',
+                                                        style: { width: `${progres}%` }
+                                                    })
+                                                ),
+                                                !obj.termine && React.createElement(
+                                                    'div',
+                                                    { className: 'mt-2' },
+                                                    React.createElement('input', {
+                                                        type: 'number',
+                                                        step: '0.01',
+                                                        placeholder: 'Montant économisé supplémentaire',
+                                                        onChange: (e) => updateProgresObjectif(id, e.target.value)},
+                                                        className: 'w-full px-2 py-1 border rounded text-sm'
+                                                    )
+                                                ),
+                                                React.createElement(
+                                                    'button',
+                                                    {
+                                                        onClick: () => supprimerObjectif(id),
+                                                        className: 'mt-2 text-red-600 text-sm hover:bg-red-50 dark:hover:bg-gray-700 rounded px-2 py-1'
+                                                    },
+                                                    'Supprimer'
+                                                )
+                                            );
+                                        }) :
+                                    React.createElement(
+                                        'div',
+                                        { className: 'text-center py-4 text-gray-500 dark:text-gray-400' },
+                                        'Aucun objectif enregistré'
+                                    )
+                            )
+                        ),
+
+                        view === 'stats' && React.createElement(
+                            'div',
+                            { className: 'space-y-4' },
+                            // Sélecteur de compte
+                            AccountSelector(),
+
+                            // Graphiques
+                            renderChart(),
+                            renderAccountChart(),
+
+                            // Dépenses par magasin
+                            currentMonthStats && Object.entries(currentMonthStats.byMagasin).length > 0 && React.createElement(
+                                'div',
+                                { className: 'bg-white dark:bg-gray-800 rounded-xl p-4 shadow' },
+                                React.createElement('h3', { className: 'font-semibold mb-2' }, 'Dépenses par magasin'),
+                                Object.entries(currentMonthStats.byMagasin)
+                                    .sort((a, b) => b[1] - a[1])
+                                    .map(([magasin, montant]) =>
+                                        React.createElement(
+                                            'div',
+                                            { key: magasin, className: 'flex justify-between py-2 border-b last:border-0 border-gray-100 dark:border-gray-700' },
+                                            React.createElement('div', null, magasin),
+                                            React.createElement('div', null, `${montant.toFixed(2)} €`)
+                                        )
+                                    )
+                            ),
+
+                            // Historique des soldes
+                            React.createElement(
+                                'div',
+                                { className: 'bg-white dark:bg-gray-800 rounded-xl p-4 shadow' },
+                                React.createElement('h3', { className: 'font-semibold mb-2' }, 'Évolution du solde'),
+                                React.createElement(
+                                    'div',
+                                    { className: 'grid grid-cols-3 gap-2 text-center mt-2' },
+                                    [-1, 0, 1].map(offset => {
+                                        const monthIndex = moisActuel + offset;
+                                        const year = anneeActuelle + (monthIndex < 0 ? -1 : monthIndex > 11 ? 1 : 0);
+                                        const normalizedMonth = (monthIndex + 12) % 12;
+                                        const solde = calculerSolde(moisFr[normalizedMonth], year, activeAccount);
+
+                                        return React.createElement(
+                                            'div',
+                                            { key: offset },
+                                            React.createElement('div', { className: 'text-xs' },
+                                                moisFr[normalizedMonth].substring(0, 3)
+                                            ),
+                                            React.createElement('div', {
+                                                className: `font-medium ${solde >= 0 ? 'text-green-600' : 'text-red-600'}`
+                                            }, `${solde.toFixed(0)}€`)
+                                        );
+                                    })
+                                )
+                            )
+                        )
                     )
                 )
             );
         };
+
+        // Initialisation du graphique après le rendu
+        setTimeout(() => {
+            if (window.ApexCharts) {
+                // Graphique catégories
+                if (document.querySelector("#chart")) {
+                    const chartOptions = {
+                        series: currentMonthStats ? Object.values(currentMonthStats.byCategory) : [1],
+                        chart: { type: 'donut', height: 300 },
+                        labels: currentMonthStats ? Object.keys(currentMonthStats.byCategory) : ['Aucune donnée'],
+                        colors: ['#10B981', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6', '#06B6D4', '#EC4899', '#14B8A6'],
+                        plotOptions: { pie: { donut: { labels: { show: true, total: { show: true } } } } },
+                        dataLabels: { enabled: true },
+                        legend: { position: 'bottom' }
+                    };
+                    const chart = new ApexCharts(document.querySelector("#chart"), chartOptions);
+                    chart.render();
+                }
+
+                // Graphique comptes
+                if (document.querySelector("#account-chart") && currentMonthStats) {
+                    const accounts = typesDeComptes.map(acc => acc.id);
+                    const soldeData = accounts.map(acc => currentMonthStats.byAccount[acc]?.solde || 0);
+                    const depensesData = accounts.map(acc => currentMonthStats.byAccount[acc]?.total || 0);
+
+                    const accountChartOptions = {
+                        series: [{
+                            name: 'Solde',
+                            data: soldeData
+                        }, {
+                            name: 'Dépenses',
+                            data: depensesData
+                        }],
+                        chart: { type: 'bar', height: 250, stacked: false },
+                        plotOptions: { bar: { horizontal: false, columnWidth: '50%' } },
+                        dataLabels: { enabled: false },
+                        stroke: { width: 1 },
+                        colors: typesDeComptes.map(acc => acc.color),
+                        xaxis: { categories: typesDeComptes.map(acc => acc.name) },
+                        yaxis: { title: { text: 'Montant (€)' } },
+                        legend: { position: 'top' }
+                    };
+                    const accountChart = new ApexCharts(document.querySelector("#account-chart"), accountChartOptions);
+                    accountChart.render();
+                }
+            }, 1000);
 
         ReactDOM.render(React.createElement(App), document.getElementById('root'));
     </script>
